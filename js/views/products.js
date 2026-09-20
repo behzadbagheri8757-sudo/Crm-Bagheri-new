@@ -21,7 +21,16 @@
   }
 
   function productValue(p) {
+    if (typeof productInventoryValue === 'function') return productInventoryValue(p.id);
     return (Number(p.stockQty) || 0) * (Number(p.buy) || 0);
+  }
+
+  // Display-only: cap quantity to 2 decimal places (e.g. 3.176470588 -> 3.18).
+  // Does not touch p.stockQty itself or any calculation — formatting only.
+  function fmtQty(n) {
+    var num = Number(n) || 0;
+    var rounded = Math.round(num * 100) / 100;
+    return String(rounded);
   }
 
   function renderProductListOnly() {
@@ -76,6 +85,12 @@
       rows.sort(function (a, b) {
         return (a.p.name || '').localeCompare(b.p.name || '', 'fa');
       });
+    // Inactive products remain visible but sort to the bottom (existing convention).
+    rows.sort(function (a, b) {
+      const aOff = a.p.active === false ? 1 : 0;
+      const bOff = b.p.active === false ? 1 : 0;
+      return aOff - bOff;
+    });
 
     if (!rows.length) {
       list.innerHTML =
@@ -91,35 +106,45 @@
           const st = x.st;
           const val = x.val;
           const unit = p.packageWeight ? 'بسته ' + p.packageWeight : 'عدد';
-          const inactive = p.active === false ? ' <span class="badge">غیرفعال</span>' : '';
+          const isOff = p.active === false;
+          // Visual-only: dim row + compact OFF badge. No behavior change.
+          const inactiveBadge = isOff
+            ? ' <span class="badge pending" style="display:inline-block;vertical-align:middle;font-size:.72em;padding:1px 7px;margin-right:4px;opacity:1;">غیرفعال</span>'
+            : '';
+          const offStyle = isOff
+            ? 'cursor:pointer;opacity:.42;filter:grayscale(.35);'
+            : 'cursor:pointer;';
+          const statusExtra =
+            st.key === 'low' && p.minStock ? ' (حداقل ' + p.minStock + ')' : '';
           return (
-            '<div class="ledger-row" data-edit-product="' +
+            '<div class="ledger-row tx-row" data-edit-product="' +
             esc(p.id) +
-            '" style="cursor:pointer;">' +
+            '" style="' +
+            offStyle +
+            '">' +
             '<span class="name">' +
+            '<span class="tx-row-title">' +
             esc(p.name) +
-            inactive +
+            inactiveBadge +
+            '</span>' +
             '<span class="sub">' +
             esc(p.category || '—') +
-            ' — واحد: ' +
+            ' · ' +
             esc(String(unit)) +
-            ' — خرید: ' +
-            toman(p.buy) +
-            ' / فروش: ' +
-            toman(p.retail || p.sell || 0) +
             '</span>' +
             '<span class="sub ' +
             st.cls +
             '">' +
             st.label +
-            (st.key === 'low' && p.minStock ? ' (حداقل ' + p.minStock + ')' : '') +
+            statusExtra +
             '</span></span>' +
             '<span class="filler"></span>' +
-            '<span class="amount">' +
-            (p.stockQty || 0) +
-            '<span class="sub" style="display:block;">ارزش: ' +
-            toman(val) +
-            ' ت</span></span></div>'
+            '<span class="amount tx-row-amount product-row-summary">' +
+            '<span class="product-row-value"><span class="product-row-label">ارزش کل</span><span class="tx-row-total">' +
+            toman(val) + ' ت</span></span>' +
+            '<span class="product-row-qty"><span class="product-row-label">موجودی</span><span class="product-row-qty-value">' +
+            fmtQty(p.stockQty) + ' ' + esc(String(unit)) + '</span></span>' +
+            '</span></div>'
           );
         })
         .join('');
@@ -140,7 +165,6 @@
       );
     };
     root.innerHTML =
-      '<h2 class="section-title">کالا و اجناس</h2>' +
       '<div class="btn-row" style="margin-bottom:10px;">' +
       '<a class="btn secondary small" href="' +
       invHref +
@@ -155,8 +179,9 @@
       chip('zero', 'ناموجود') +
       chip('neg', 'منفی') +
       '</div>' +
-      '<div class="field"><label>مرتب‌سازی</label>' +
-      '<select id="product-sort">' +
+      '<div class="tx-toolbar">' +
+      '<label class="tx-toolbar-label" for="product-sort">مرتب‌سازی</label>' +
+      '<select id="product-sort" class="tx-toolbar-select">' +
       '<option value="name"' +
       (prodSort === 'name' ? ' selected' : '') +
       '>نام</option>' +
@@ -170,7 +195,7 @@
       (prodSort === 'valueDesc' ? ' selected' : '') +
       '>ارزش موجودی</option>' +
       '</select></div>' +
-      '<div id="product-list"></div>';
+      '<div id="product-list" class="tx-list"></div>';
 
     const searchEl = document.getElementById('product-search');
     searchHandler = function (e) {
