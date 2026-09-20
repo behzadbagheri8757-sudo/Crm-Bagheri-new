@@ -2,25 +2,39 @@
 <html lang="fa" dir="rtl" data-spa-shell="1">
 <head>
 <meta charset="UTF-8">
+<script>
+/* Apply saved theme before first paint (prevents flash of wrong/default theme).
+   Reads the same key/logic as the picker in js/views/settings.js. */
+(function(){
+  try{
+    var t = localStorage.getItem('baqeri_theme_v1');
+    if(t && t !== 'default'){
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  }catch(e){}
+})();
+</script>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
 <link rel="manifest" href="./manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="باقری">
 <!-- Home Screen App Icons only (not invoice/print logo) -->
 <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
 <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png">
-<link rel="apple-touch-icon" sizes="167x167" href="./icons/icon-167.png">
 <link rel="apple-touch-icon" sizes="152x152" href="./icons/icon-152.png">
-<link rel="apple-touch-icon" sizes="120x120" href="./icons/icon-120.png">
 <title>داشبورد — حبوبات و خشکبار باقری</title>
 <script src="./vendor/xlsx.full.min.js"></script>
 <script src="./vendor/html2canvas.min.js"></script>
 <link rel="stylesheet" href="./css/app.css">
+<link rel="stylesheet" href="./css/visual-grammar.css">
+<link rel="stylesheet" href="./css/visual-grammar-components.css">
+<link rel="stylesheet" href="./css/visual-grammar-pages.css">
+<link rel="stylesheet" href="./css/shamsi-calendar.css">
 <style>
 .report-section{margin-bottom:22px;}
 .report-section h3{font-size:1rem;margin:0 0 10px;font-weight:800;}
@@ -42,12 +56,25 @@
 
 <script src="./js/models.js"></script>
 <script src="./js/ui.js"></script>
+<script src="./js/shamsi-calendar.js"></script>
 <script src="./js/db.js"></script>
+<script src="./js/location.js"></script>
 <script src="./js/calc.js"></script>
+<script src="./js/intelligence/persistence.js"></script>
+<script src="./js/intelligence/feedback.js"></script>
+<script src="./js/intelligence/baseline_manager.js"></script>
+<script src="./js/intelligence/seasonality.js"></script>
+<script src="./js/intelligence/interpretation.js"></script>
+<script src="./js/intelligence/signals.js"></script>
+<script src="./js/intelligence/sku_intelligence.js"></script>
+<script src="./js/intelligence/risk.js"></script>
+<script src="./js/intelligence/priority.js"></script>
+<script src="./js/intelligence/action.js"></script>
+<script src="./js/intelligence/watch_lifecycle.js"></script>
 <script src="./js/stock.js"></script>
-<script src="./js/payments.js"></script>
 <script src="./js/backup.js"></script>
 <script src="./js/pin-lock.js"></script>
+<script src="./js/icons.js"></script>
 <script src="./js/nav.js"></script>
 <script src="./js/app.js"></script>
 <script src="./js/prospect-scoring.js"></script>
@@ -58,6 +85,7 @@
 <script src="./js/router.js"></script>
 <script src="./js/view.host.js"></script>
 <script src="./js/views/dashboard.js"></script>
+<script src="./js/views/watches.js"></script>
 <script src="./js/views/reports.js"></script>
 <script src="./js/views/products.js"></script>
 <script src="./js/views/inventory.js"></script>
@@ -71,11 +99,13 @@
 <script src="./js/views/prospects.js"></script>
 <script src="./js/views/prospect.js"></script>
 <script src="./js/views/prospect-routes.js"></script>
+<script src="./js/views/locations.js"></script>
 <script src="./js/views/evaluation.js"></script>
 <script src="./js/views/checks.js"></script>
 <script src="./js/views/invoice.js"></script>
 <script src="./js/views/game-center.js"></script>
 <script src="./js/views/settings.js"></script>
+<script src="./js/views/more.js"></script>
 
 <script>
 /* Phase 3-9 SPA shell */
