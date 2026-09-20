@@ -179,7 +179,7 @@
   }
 
   async function gameSaveLedger(ledger) {
-    await _writeRaw(_ledgerKey(), ledger);
+    if(!await _writeRaw(_ledgerKey(), ledger)) return false;
     return ledger;
   }
 
@@ -240,7 +240,8 @@
       reversed: false
     };
     ledger.push(entry);
-    await gameSaveLedger(ledger);
+    const saved = await gameSaveLedger(ledger);
+    if(!saved) return { ok: false, reason: 'persistence_failed' };
     return { ok: true, entry: entry };
   }
 
@@ -256,7 +257,8 @@
     if (entry.reversed) return { ok: false, reason: 'already_reversed', entry: entry };
     entry.reversed = true;
     entry.reversedAt = new Date().toISOString();
-    await gameSaveLedger(ledger);
+    const saved = await gameSaveLedger(ledger);
+    if(!saved) return { ok: false, reason: 'persistence_failed' };
     return { ok: true, entry: entry };
   }
 
@@ -780,6 +782,17 @@
     return gameReverse(key);
   }
 
+  /**
+   * Reverse evaluation XP when a Prospect visit/evaluation is deleted
+   * (to be called from prospect-core when a shop or visit is removed).
+   */
+  async function gameOnEvaluationDeleted(shopId, visitId) {
+    const cfg = _cfg();
+    const prefixes = cfg.ledgerKeys || {};
+    const key = (prefixes.evaluation || 'eval') + ':' + shopId + ':' + visitId;
+    return gameReverse(key);
+  }
+
   // ====================================================================
   // Snapshot for future UI (morning / evening)
   // ====================================================================
@@ -873,6 +886,7 @@
     onPayment: gameOnPayment,
     onInvoiceDeleted: gameOnInvoiceDeleted,
     onPaymentDeleted: gameOnPaymentDeleted,
+    onEvaluationDeleted: gameOnEvaluationDeleted,
 
     // snapshot
     getSnapshot: gameGetSnapshot
@@ -893,6 +907,7 @@
   global.gameOnPayment = gameOnPayment;
   global.gameOnInvoiceDeleted = gameOnInvoiceDeleted;
   global.gameOnPaymentDeleted = gameOnPaymentDeleted;
+  global.gameOnEvaluationDeleted = gameOnEvaluationDeleted;
   global.gameDeriveDayCounts = gameDeriveDayCounts;
   global.gameDeriveDailyQuests = gameDeriveDailyQuests;
   global.gameRecomputeContinuity = gameRecomputeContinuity;

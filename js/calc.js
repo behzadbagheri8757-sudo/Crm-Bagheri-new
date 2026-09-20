@@ -37,7 +37,8 @@ function customerTotals(cid){
 function invoiceDiscountAmount(inv){
   if(inv.discountType==='percent'){
     const subtotal = (inv.items||[]).reduce((s,it)=>s+it.qty*it.price-(it.discount||0),0);
-    return subtotal*(inv.discount||0)/100;
+    const pct = Math.min(100, Math.max(0, Number(inv.discount)||0));
+    return subtotal*pct/100;
   }
   return inv.discount||0;
 }
@@ -69,7 +70,7 @@ function invoiceEffectivePaid(inv){
   (data.payments||[]).forEach(p=>{
     if(p.customerId !== cid) return;
     if(p.invoiceId) return;
-    if(['cash','card','transfer','discount','return'].includes(p.method)) pool += (p.amount||0);
+    if(['cash','card','transfer','discount'].includes(p.method)) pool += (p.amount||0);
   });
   (data.checks||[]).forEach(c=>{
     if(c.customerId !== cid) return;
@@ -125,19 +126,57 @@ function customerProfit(cid){
       // previous "last sold" behavior only for legacy/account-only returns with no
       // linked invoice (payment.invoiceId missing), so old data keeps working.
       let sourceItem = null;
+      let buyCostTotal = 0;
+      let allocatedQty = 0;
       if(p.invoiceId){
         const srcInv = data.invoices.find(i=>i.id===p.invoiceId);
         if(srcInv){
-          sourceItem = (srcInv.items||[]).find(it=>it.productId===ri.productId) || null;
+          const items = (srcInv.items||[]).filter(it=>it.productId===ri.productId);
+          // Match stock.js return allocation order: all original FIFO allocations
+          // for this product, in invoice-line order, skipping previous returns.
+          const allocs = [];
+          items.forEach(it=>{
+            if(Array.isArray(it.costAllocations)) it.costAllocations.forEach(a=>{
+              const q=Number(a.qty)||0; const uc=Number(a.unitCost)||0;
+              if(q>0) allocs.push({qty:q, unitCost:uc});
+            });
+          });
+          if(allocs.length){
+            let skip=0;
+            for(const x of customerPayments(cid)){
+              if(x.method!=='return' || x.invoiceId!==p.invoiceId) continue;
+              if(x.id===p.id) break;
+              (x.returnItems||[]).forEach(xri=>{ if(xri.productId===ri.productId) skip += Number(xri.qty)||0; });
+            }
+            let need=Number(ri.qty)||0;
+            for(const a of allocs){
+              if(skip>=a.qty){ skip-=a.qty; continue; }
+              const take=Math.min(need, a.qty-skip);
+              if(take>0){ buyCostTotal += take*a.unitCost; allocatedQty += take; need -= take; }
+              skip=0;
+              if(need<=1e-9) break;
+            }
+          }
+          sourceItem = items[0] || null;
         }
       }
       if(!sourceItem){
         const sold = customerInvoices(cid).flatMap(inv=>inv.items.filter(it=>it.productId===ri.productId));
         sourceItem = sold.length ? sold[sold.length-1] : null;
       }
-      const buy = (sourceItem && sourceItem.buyPrice!==undefined) ? (sourceItem.buyPrice||0) : (prod ? (prod.buy||0) : 0);
-      const sell = (ri.price>0) ? ri.price : (sourceItem ? (sourceItem.price||0) : 0);
-      s -= (sell - buy) * ri.qty;
+      const qty=Number(ri.qty)||0;
+      const sell = (ri.price>0) ? Number(ri.price) : (sourceItem ? Number(sourceItem.price)||0 : 0);
+      if(allocatedQty>0){
+        const qtyForCost=Math.min(qty,allocatedQty);
+        s -= (sell * qtyForCost) - buyCostTotal;
+        if(qtyForCost < qty){
+          const fallbackBuy=(sourceItem && sourceItem.buyPrice!==undefined) ? (Number(sourceItem.buyPrice)||0) : (prod ? (Number(prod.buy)||0) : 0);
+          s -= (sell - fallbackBuy) * (qty-qtyForCost);
+        }
+      } else {
+        const buy=(sourceItem && sourceItem.buyPrice!==undefined) ? (Number(sourceItem.buyPrice)||0) : (prod ? (Number(prod.buy)||0) : 0);
+        s -= (sell - buy) * qty;
+      }
     });
   });
   // کسر تراکنش «تخفیف (کاهش بدهی)» از سود گزارش‌شده
@@ -392,11 +431,32 @@ function _behaviorReturnPayments(cid){
     .filter(p => p && p.method === 'return');
 }
 
-function _behaviorReturnsInRange(returns, startISO, endISO){
+function _behaviorReturnsInRange(returns, startISO, endISO, invs){
+  // BUGFIX (proven by runtime repro): a return should offset the sales
+  // bucket that contains the ORIGINAL sale, not whichever period the
+  // return itself happens to fall in. Previously this used the return's
+  // own date only, so returning an old invoice today could silently
+  // corrupt the CURRENT period's totals (observed producing a negative
+  // "sales30" figure) even though nothing about the current period
+  // actually changed. When the return is linked to its original invoice
+  // (p.invoiceId) and that invoice is resolvable, use the invoice's date
+  // instead. Falls back to the return's own date when unresolvable
+  // (e.g. account-only returns with no invoiceId), preserving prior
+  // behavior for that case.
+  var invById = null;
+  if (Array.isArray(invs)) {
+    invById = {};
+    for (var i = 0; i < invs.length; i++) {
+      if (invs[i] && invs[i].id) invById[invs[i].id] = invs[i];
+    }
+  }
   return returns.reduce((s, p)=>{
-    const d = p.date || '';
-    if(startISO && d < startISO) return s;
-    if(endISO && d > endISO) return s;
+    var refDate = p.date || '';
+    if (invById && p.invoiceId && invById[p.invoiceId] && invById[p.invoiceId].date) {
+      refDate = invById[p.invoiceId].date;
+    }
+    if(startISO && refDate < startISO) return s;
+    if(endISO && refDate > endISO) return s;
     return s + (p.amount || 0);
   }, 0);
 }
@@ -408,6 +468,198 @@ function _behaviorISODaysAgo(n){
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return y + '-' + m + '-' + day;
+}
+
+/**
+ * Visit cadence (days) from consecutive customer visit gaps.
+ * <2 visits → null. Median gap, clamped to 1..90. Read-only.
+ */
+function visitCadence(cid){
+  if(!cid || typeof data === 'undefined' || !Array.isArray(data.customers)) return null;
+  const cust = data.customers.find(function(c){ return c && c.id === cid; });
+  const visits = (cust && Array.isArray(cust.visits)) ? cust.visits : [];
+  if(visits.length < 2) return null;
+
+  const sorted = visits.slice().sort(function(a, b){
+    return String(a.date || '').localeCompare(String(b.date || '')) ||
+      String(a.time || '').localeCompare(String(b.time || ''));
+  });
+
+  const gaps = [];
+  for(let i = 1; i < sorted.length; i++){
+    const d0 = sorted[i - 1].date;
+    const d1 = sorted[i].date;
+    if(!d0 || !d1) continue;
+    let days = null;
+    const p0 = (typeof parseISODateParts === 'function') ? parseISODateParts(String(d0).slice(0, 10)) : null;
+    const p1 = (typeof parseISODateParts === 'function') ? parseISODateParts(String(d1).slice(0, 10)) : null;
+    if(p0 && p1){
+      const t0 = new Date(p0.y, p0.m - 1, p0.d).getTime();
+      const t1 = new Date(p1.y, p1.m - 1, p1.d).getTime();
+      if(!isNaN(t0) && !isNaN(t1)) days = Math.round((t1 - t0) / 86400000);
+    } else {
+      const t0 = new Date(d0).getTime();
+      const t1 = new Date(d1).getTime();
+      if(!isNaN(t0) && !isNaN(t1)) days = Math.round((t1 - t0) / 86400000);
+    }
+    if(days != null && isFinite(days) && days >= 0) gaps.push(days);
+  }
+  if(!gaps.length) return null;
+
+  gaps.sort(function(a, b){ return a - b; });
+  const mid = Math.floor(gaps.length / 2);
+  let median;
+  if(gaps.length % 2 === 1) median = gaps[mid];
+  else median = Math.round((gaps[mid - 1] + gaps[mid]) / 2);
+
+  if(!isFinite(median) || median < 1) return 1;
+  if(median > 90) return 90;
+  return median;
+}
+
+/**
+ * Days the customer is overdue relative to their visit cadence.
+ * No cadence → 0. Read-only.
+ */
+function visitOverdueDays(cid){
+  const cadence = visitCadence(cid);
+  if(!cadence) return 0;
+  if(!cid || typeof data === 'undefined' || !Array.isArray(data.customers)) return 0;
+  const cust = data.customers.find(function(c){ return c && c.id === cid; });
+  const visits = (cust && Array.isArray(cust.visits)) ? cust.visits : [];
+  if(!visits.length) return 0;
+
+  const sorted = visits.slice().sort(function(a, b){
+    return String(b.date || '').localeCompare(String(a.date || '')) ||
+      String(b.time || '').localeCompare(String(a.time || ''));
+  });
+  const lastDate = sorted[0] && sorted[0].date;
+  if(!lastDate) return 0;
+  const daysSince = (typeof daysAgo === 'function') ? daysAgo(lastDate) : null;
+  if(daysSince == null || !isFinite(daysSince)) return 0;
+  return Math.max(0, daysSince - cadence);
+}
+
+/* Valid rejection reason codes — mirrors REJECTION_REASON_CHIPS in app.js /
+   the rr label map in views/visits.js & views/customer.js. Kept local to
+   calc.js (read-only lookup only); not a new stored schema. */
+var _BEHAVIOR_VALID_REJECTION_REASONS = { price:1, quality:1, competitor:1, unavailable:1, no_need:1, still_stock:1, other:1 };
+/* Valid stockSource codes when rejectionReason === 'still_stock'. Independent from rejectionReason=competitor. */
+var _BEHAVIOR_VALID_STOCK_SOURCES = { ours:1, competitor:1, unknown:1 };
+
+/** Same date-diff mechanism as the avgIntervalDays block above (parseISODateParts,
+ * falling back to new Date(iso) on parse failure) — no new timezone handling invented.
+ * Returns days from isoFrom to isoTo (isoTo - isoFrom), or null if either date is unparsable. */
+function _behaviorDaysDiff(isoFrom, isoTo){
+  const p0 = (typeof parseISODateParts === 'function') ? parseISODateParts(isoFrom) : null;
+  const p1 = (typeof parseISODateParts === 'function') ? parseISODateParts(isoTo) : null;
+  let t0, t1;
+  if(p0 && p1){
+    t0 = new Date(p0.y, p0.m - 1, p0.d).getTime();
+    t1 = new Date(p1.y, p1.m - 1, p1.d).getTime();
+  } else {
+    t0 = new Date(isoFrom).getTime();
+    t1 = new Date(isoTo).getTime();
+  }
+  if(isNaN(t0) || isNaN(t1)) return null;
+  return Math.round((t1 - t0) / 86400000);
+}
+
+/* PHASE 1 — Product Offered + Customer Reaction + Rejection Reason.
+ * Pure derived read from data.customers[].visits[].offeredProducts[]. Never mutates data,
+ * never counts accepted/deferred as a sale/order. */
+function _behaviorOfferedProductStats(visits){
+  const map = {}; // productId -> stat entry
+  const order = [];
+  (visits || []).forEach(v=>{
+    if(!Array.isArray(v.offeredProducts)) return;
+    v.offeredProducts.forEach(op=>{
+      if(!op || !op.productId) return; // skip: no productId
+      const pid = op.productId;
+      if(!map[pid]){
+        const prod = (data.products || []).find(p=>p.id===pid);
+        map[pid] = {
+          productId: pid,
+          productName: prod ? (prod.name || pid) : pid,
+          offeredCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          deferredCount: 0,
+          rejectionReasons: {},
+          stillStockSources: { ours: 0, competitor: 0, unknown: 0 },
+          lastOfferedDate: null,
+        };
+        order.push(pid);
+      }
+      const st = map[pid];
+      st.offeredCount++;
+      if(op.reaction === 'accepted'){
+        st.acceptedCount++;
+      } else if(op.reaction === 'deferred'){
+        st.deferredCount++;
+      } else if(op.reaction === 'rejected'){
+        st.rejectedCount++;
+        const reason = op.rejectionReason;
+        if(reason && _BEHAVIOR_VALID_REJECTION_REASONS[reason]){
+          st.rejectionReasons[reason] = (st.rejectionReasons[reason] || 0) + 1;
+        }
+        // still_stock + stockSource breakdown (independent from rejectionReason=competitor)
+        if(reason === 'still_stock' && op.stockSource && _BEHAVIOR_VALID_STOCK_SOURCES[op.stockSource]){
+          st.stillStockSources[op.stockSource] = (st.stillStockSources[op.stockSource] || 0) + 1;
+        }
+        // invalid/empty reason: counted in rejectedCount above, just not aggregated by reason
+      }
+      if(v.date && (!st.lastOfferedDate || v.date > st.lastOfferedDate)){
+        st.lastOfferedDate = v.date;
+      }
+    });
+  });
+  return order.map(pid=>map[pid]);
+}
+
+/* PHASE 2 — Visit ↔ Invoice contextual attribution.
+ * Pure derived read from data.invoices[] + this customer's own visits (ownership preserved:
+ * only visits already scoped to this customer are searched). Never mutates data, never
+ * changes invoiceCount/sales30/sales90/visitCount/conversionRate. */
+function _behaviorVisitInvoiceStats(invs, visits){
+  const empty = {
+    linkedInvoiceCount: 0,
+    avgDaysBetweenVisitAndInvoice: null,
+    minDays: null,
+    maxDays: null,
+    lastDays: null,
+    lastInvoiceDate: null,
+    lastVisitDate: null,
+  };
+  if(!Array.isArray(invs) || !invs.length || !Array.isArray(visits) || !visits.length) return empty;
+
+  const links = []; // in ascending invoice order (invs is pre-sorted ascending by date/number)
+  invs.forEach(inv=>{
+    const vid = inv.visitId;
+    if(!vid || typeof vid !== 'string' || !vid.trim()) return; // no/invalid visitId
+    const visit = visits.find(v=>v.id === vid);
+    if(!visit) return; // not resolvable within this customer's own visits → not linked
+    const days = _behaviorDaysDiff(visit.date, inv.date);
+    if(days === null) return; // unparsable dates → not linked
+    if(days < 0) return; // invoice.date < visit.date → excluded from valid attribution, no new rule invented
+    links.push({ days, invoiceDate: inv.date, visitDate: visit.date });
+  });
+
+  if(!links.length) return empty;
+
+  const daysList = links.map(l=>l.days);
+  const sum = daysList.reduce((a,b)=>a+b, 0);
+  const last = links[links.length - 1];
+
+  return {
+    linkedInvoiceCount: links.length,
+    avgDaysBetweenVisitAndInvoice: sum / links.length,
+    minDays: Math.min.apply(null, daysList),
+    maxDays: Math.max.apply(null, daysList),
+    lastDays: last.days,
+    lastInvoiceDate: last.invoiceDate,
+    lastVisitDate: last.visitDate,
+  };
 }
 
 /**
@@ -463,9 +715,9 @@ function customerBehavior(cid){
   const d60 = _behaviorISODaysAgo(60);
   const d90 = _behaviorISODaysAgo(90);
   const d31 = _behaviorISODaysAgo(31);
-  const sales30 = _behaviorSalesInRange(invs, d30, today) - _behaviorReturnsInRange(returns, d30, today);
-  const sales90 = _behaviorSalesInRange(invs, d90, today) - _behaviorReturnsInRange(returns, d90, today);
-  const salesPrev30 = _behaviorSalesInRange(invs, d60, d31) - _behaviorReturnsInRange(returns, d60, d31);
+  const sales30 = _behaviorSalesInRange(invs, d30, today) - _behaviorReturnsInRange(returns, d30, today, invs);
+  const sales90 = _behaviorSalesInRange(invs, d90, today) - _behaviorReturnsInRange(returns, d90, today, invs);
+  const salesPrev30 = _behaviorSalesInRange(invs, d60, d31) - _behaviorReturnsInRange(returns, d60, d31, invs);
 
   let amountTrend = null;
   if(count >= 2){
@@ -504,8 +756,14 @@ function customerBehavior(cid){
       prodMap[key].revenue -= (ri.qty || 0) * (ri.price || 0);
     });
   });
+  // Exclude inactive products from CURRENT intelligence signals only (not historical data).
   const topProductsList = Object.values(prodMap)
     .filter(p => p.qty > 0.0001)
+    .filter(p => {
+      if(!p.productId) return true;
+      const prod = (data.products || []).find(x => x.id === p.productId);
+      return !prod || prod.active !== false;
+    })
     .sort((a,b)=> b.qty - a.qty)
     .slice(0, 5);
 
@@ -519,7 +777,9 @@ function customerBehavior(cid){
       list.forEach(inv => (inv.items||[]).forEach(it=>{
         const key = it.productId || ('n:' + (it.name||''));
         if(!map[key]) map[key] = { productId: it.productId||null, name: it.name||'—', qty: 0 };
-        map[key].qty += (it.qty||0);
+        /* کشمش پلویی: نرمال‌سازی به تعداد بسته/کارتن تا رکوردهای قدیمی (qty=کیلوگرم)
+           و جدید (qty=تعداد بسته) قابل مقایسه باشند — رجوع کن به _raisinPilafPackages بالای فایل. */
+        map[key].qty += _isRaisinPilafItem(it, _raisinIdsForBehavior) ? _raisinPilafPackages(it) : (it.qty||0);
       }));
     }
     accSold(early, earlyMap);
@@ -540,6 +800,11 @@ function customerBehavior(cid){
       const e = earlyMap[key].qty;
       const l = (lateMap[key] && lateMap[key].qty) || 0;
       if(e >= 2 && l < e * 0.6){
+        const pid = earlyMap[key].productId;
+        if(pid){
+          const prod = (data.products || []).find(x => x.id === pid);
+          if(prod && prod.active === false) return; // exclude inactive from CURRENT signals
+        }
         decliningProducts.push({
           name: earlyMap[key].name,
           productId: earlyMap[key].productId,
@@ -567,6 +832,10 @@ function customerBehavior(cid){
     consecutiveNoOrder++;
   }
 
+  // PHASE 1 + PHASE 2 — additive, derived-only metadata (see functions above).
+  const offeredProductStats = _behaviorOfferedProductStats(visits);
+  const visitInvoiceStats = _behaviorVisitInvoiceStats(invs, visits);
+
   return {
     invoiceCount: count,
     firstInvoiceDate,
@@ -590,6 +859,8 @@ function customerBehavior(cid){
     consecutiveNoOrder,
     lastVisit,
     lastNextAction,
+    offeredProductStats,
+    visitInvoiceStats,
   };
 }
 
@@ -628,17 +899,65 @@ function _ccReturnMarginForPayment(cid, p){
     if(!(Number(ri.qty)>0)) return;
     const prod = (data.products||[]).find(function(x){ return x.id===ri.productId; });
     let sourceItem = null;
+    let buyCostTotal = 0;
+    let allocatedQty = 0;
     if(p.invoiceId){
       const srcInv = (data.invoices||[]).find(function(i){ return i.id===p.invoiceId; });
-      if(srcInv) sourceItem = (srcInv.items||[]).find(function(it){ return it.productId===ri.productId; }) || null;
+      if(srcInv){
+        const items = (srcInv.items||[]).filter(function(it){ return it.productId===ri.productId; });
+        // Match customerProfit()/stock.js return allocation order: all original FIFO
+        // allocations for this product, in invoice-line order, skipping previous returns.
+        const allocs = [];
+        items.forEach(function(it){
+          if(Array.isArray(it.costAllocations)) it.costAllocations.forEach(function(a){
+            const q=Number(a.qty)||0; const uc=Number(a.unitCost)||0;
+            if(q>0) allocs.push({qty:q, unitCost:uc});
+          });
+        });
+        if(allocs.length){
+          let skip=0;
+          for(const x of customerPayments(cid)){
+            if(x.method!=='return' || x.invoiceId!==p.invoiceId) continue;
+            if(x.id===p.id) break;
+            (x.returnItems||[]).forEach(function(xri){
+              if(xri.productId===ri.productId) skip += Number(xri.qty)||0;
+            });
+          }
+          let need=Number(ri.qty)||0;
+          for(const a of allocs){
+            if(skip>=a.qty){ skip-=a.qty; continue; }
+            const take=Math.min(need, a.qty-skip);
+            if(take>0){
+              buyCostTotal += take*a.unitCost;
+              allocatedQty += take;
+              need -= take;
+            }
+            skip=0;
+            if(need<=1e-9) break;
+          }
+        }
+        sourceItem = items[0] || null;
+      }
     }
     if(!sourceItem){
-      const sold = customerInvoices(cid).flatMap(function(inv){ return (inv.items||[]).filter(function(it){ return it.productId===ri.productId; }); });
+      const sold = customerInvoices(cid).flatMap(function(inv){
+        return (inv.items||[]).filter(function(it){ return it.productId===ri.productId; });
+      });
       sourceItem = sold.length ? sold[sold.length-1] : null;
     }
-    const buy = sourceItem && sourceItem.buyPrice!==undefined ? (sourceItem.buyPrice||0) : (prod ? (prod.buy||0) : 0);
-    const sell = Number(ri.price)>0 ? Number(ri.price) : (sourceItem ? (sourceItem.price||0) : 0);
-    margin += (sell - buy) * Number(ri.qty);
+    const qty=Number(ri.qty)||0;
+    const sell = Number(ri.price)>0 ? Number(ri.price) : (sourceItem ? (Number(sourceItem.price)||0) : 0);
+    if(allocatedQty>0){
+      const qtyForCost=Math.min(qty,allocatedQty);
+      margin += (sell * qtyForCost) - buyCostTotal;
+      if(qtyForCost < qty){
+        const fallbackBuy=(sourceItem && sourceItem.buyPrice!==undefined) ? (Number(sourceItem.buyPrice)||0) : (prod ? (Number(prod.buy)||0) : 0);
+        margin += (sell - fallbackBuy) * (qty-qtyForCost);
+      }
+    } else {
+      const buy=(sourceItem && sourceItem.buyPrice!==undefined) ? (Number(sourceItem.buyPrice)||0) : (prod ? (Number(prod.buy)||0) : 0);
+      margin += (sell - buy) * qty;
+    }
   });
   return margin;
 }
