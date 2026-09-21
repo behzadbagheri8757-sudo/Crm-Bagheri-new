@@ -17,22 +17,11 @@
   let locFilterHandler = null;
   let locUnassignedHandler = null;
   function customerHref(cid) {
-    return typeof isSpaShell === 'function' && isSpaShell()
-      ? '#/customer?id=' + encodeURIComponent(cid)
-      : '#/customer?id=' + encodeURIComponent(cid);
+    return '#/customer?id=' + encodeURIComponent(cid);
   }
 
   function navigateToCustomer(cid) {
-    if (
-      typeof isSpaShell === 'function' &&
-      isSpaShell() &&
-      typeof AppRouter !== 'undefined' &&
-      AppRouter.navigate
-    ) {
-      AppRouter.navigate('/customer', { id: cid });
-    } else {
-      location.href = '#/customer?id=' + encodeURIComponent(cid);
-    }
+    AppRouter.navigate('/customer', { id: cid });
   }
 
   /* Priority/story lookup — cached for the current view state and only

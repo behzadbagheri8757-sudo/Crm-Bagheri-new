@@ -12,42 +12,15 @@
   let actionHandlersBound = false;
 
   function navigateToInvoices() {
-    if (
-      typeof isSpaShell === 'function' &&
-      isSpaShell() &&
-      typeof AppRouter !== 'undefined' &&
-      AppRouter.navigate
-    ) {
-      AppRouter.navigate('/invoices');
-    } else {
-      location.href = '#/invoices';
-    }
+    AppRouter.navigate('/invoices');
   }
 
   function navigateToCustomer(cid) {
-    if (
-      typeof isSpaShell === 'function' &&
-      isSpaShell() &&
-      typeof AppRouter !== 'undefined' &&
-      AppRouter.navigate
-    ) {
-      AppRouter.navigate('/customer', { id: cid });
-    } else {
-      location.href = '#/customer?id=' + encodeURIComponent(cid);
-    }
+    AppRouter.navigate('/customer', { id: cid });
   }
 
   function navigateToInvoice(invId) {
-    if (
-      typeof isSpaShell === 'function' &&
-      isSpaShell() &&
-      typeof AppRouter !== 'undefined' &&
-      AppRouter.navigate
-    ) {
-      AppRouter.navigate('/invoice', { id: invId });
-    } else {
-      location.href = '#/invoice?id=' + encodeURIComponent(invId);
-    }
+    AppRouter.navigate('/invoice', { id: invId });
   }
 
   function invoicePaidAmount(inv) {
