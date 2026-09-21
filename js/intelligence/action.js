@@ -342,10 +342,10 @@
     });
   }
 
-  function calculateCustomerAction(cid, precomputedPriority) {
+  function calculateCustomerAction(cid, precomputedPriority, opts) {
     const priority = precomputedPriority || (
       (typeof calculateCustomerPriority === 'function')
-        ? calculateCustomerPriority(cid)
+        ? calculateCustomerPriority(cid, opts)
         : { customerId: cid, priorityScore: 0, riskLevel: 'low', signals: [] }
     );
 
@@ -421,9 +421,10 @@
 
   function calculateAllCustomerActions() {
     if (typeof data === 'undefined' || !Array.isArray(data.customers)) return [];
+    const economicRankMap = (typeof _buildEconomicRankMap === 'function') ? _buildEconomicRankMap() : null;
     const customers = data.customers.filter(function (c) { return c && c.active !== false; });
     const results = customers.map(function (c) {
-      return calculateCustomerAction(c.id);
+      return calculateCustomerAction(c.id, null, { economicRankMap: economicRankMap });
     });
     results.sort(function (a, b) {
       const ua = URGENCY_RANK[a.urgency] || 0;
@@ -546,12 +547,13 @@
 
   function calculateAllActions() {
     const impactMap = _customerImpactMap();
+    const economicRankMap = (typeof _buildEconomicRankMap === 'function') ? _buildEconomicRankMap() : null;
     const actions = [];
 
     if (typeof data !== 'undefined' && Array.isArray(data.customers)) {
       data.customers.forEach(function (c) {
         if (!c || c.active === false) return;
-        const base = calculateCustomerAction(c.id);
+        const base = calculateCustomerAction(c.id, null, { economicRankMap: economicRankMap });
         if (!base || base.actionType === 'no_action') return;
 
         const urgencyPts = URGENCY_SCORE[base.urgency] || 10;
