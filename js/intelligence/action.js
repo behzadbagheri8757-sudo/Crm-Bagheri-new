@@ -342,10 +342,12 @@
     });
   }
 
-  function calculateCustomerAction(cid) {
-    const priority = (typeof calculateCustomerPriority === 'function')
-      ? calculateCustomerPriority(cid)
-      : { customerId: cid, priorityScore: 0, riskLevel: 'low', signals: [] };
+  function calculateCustomerAction(cid, precomputedPriority) {
+    const priority = precomputedPriority || (
+      (typeof calculateCustomerPriority === 'function')
+        ? calculateCustomerPriority(cid)
+        : { customerId: cid, priorityScore: 0, riskLevel: 'low', signals: [] }
+    );
 
     const actionCandidates = _applyCurrentContextFilter(cid, priority.signals);
     const winner = _pickActionSignal(actionCandidates);
